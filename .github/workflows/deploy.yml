@@ -15,87 +15,35 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Validate SSH Secrets and Key
+      - name: Install rsync
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rsync
+
+      - name: Configure SSH
         env:
           SSH_PRIVATE_KEY: ${{ secrets.BLUEHOST_SSH_KEY }}
-          SSH_PASSPHRASE: ${{ secrets.SSH_PASSPHRASE }}
-        run: |
-          set -eu
-
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-
-          if [ -z "$SSH_PRIVATE_KEY" ]; then
-            echo "ERROR: BLUEHOST_SSH_KEY secret is empty or unavailable."
-            exit 1
-          fi
-
-          if [ -z "$SSH_PASSPHRASE" ]; then
-            echo "ERROR: SSH_PASSPHRASE secret is empty or unavailable."
-            exit 1
-          fi
-
-          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-
-          echo "Checking private key boundaries..."
-          head -n 1 ~/.ssh/deploy_key
-          tail -n 1 ~/.ssh/deploy_key
-
-          echo "Checking encrypted private key..."
-          if ! ssh-keygen -y -P "$SSH_PASSPHRASE" -f ~/.ssh/deploy_key > /dev/null; then
-            echo "ERROR: Key format or passphrase validation failed."
-            exit 1
-          fi
-
-          echo "SUCCESS: Private key format and passphrase validated."
-
-      - name: Start SSH Agent
-        env:
-          SSH_PRIVATE_KEY: ${{ secrets.BLUEHOST_SSH_KEY }}
-          SSH_PASSPHRASE: ${{ secrets.SSH_PASSPHRASE }}
-        run: |
-          set -eu
-
-          eval "$(ssh-agent -s)"
-          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
-          echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
-
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-
-          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-
-          cat > ~/.ssh/askpass.sh <<'EOF'
-          #!/bin/sh
-          printf '%s\n' "$SSH_PASSPHRASE"
-          EOF
-          chmod 700 ~/.ssh/askpass.sh
-
-          export DISPLAY=:0
-          export SSH_ASKPASS="$HOME/.ssh/askpass.sh"
-          export SSH_ASKPASS_REQUIRE=force
-
-          setsid ssh-add ~/.ssh/deploy_key < /dev/null
-          ssh-add -l
-
-      - name: Configure Bluehost SSH
-        env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_PORT: ${{ secrets.SSH_PORT }}
         run: |
           set -eu
 
-          if [ -z "$SSH_HOST" ] || [ -z "$SSH_PORT" ]; then
-            echo "ERROR: SSH_HOST or SSH_PORT is missing."
-            exit 1
-          fi
+          test -n "$SSH_PRIVATE_KEY" || { echo "BLUEHOST_SSH_KEY is empty"; exit 1; }
+          test -n "$SSH_HOST" || { echo "SSH_HOST is empty"; exit 1; }
+          test -n "$SSH_PORT" || { echo "SSH_PORT is empty"; exit 1; }
 
-          ssh-keyscan -p "$SSH_PORT" "$SSH_HOST" >> ~/.ssh/known_hosts
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+          ssh-keygen -y -f ~/.ssh/deploy_key > /dev/null
+
+          ssh-keyscan -p "$SSH_PORT" "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
           chmod 600 ~/.ssh/known_hosts
 
-      - name: Test Bluehost SSH Connection
+      - name: Test Bluehost SSH
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
@@ -103,21 +51,18 @@ jobs:
         run: |
           set -eu
 
-          if [ -z "$SSH_USERNAME" ]; then
-            echo "ERROR: SSH_USERNAME secret is missing."
-            exit 1
-          fi
+          test -n "$SSH_USERNAME" || { echo "SSH_USERNAME is empty"; exit 1; }
 
           ssh \
             -o BatchMode=yes \
             -o IdentitiesOnly=yes \
-            -o PreferredAuthentications=publickey \
             -o StrictHostKeyChecking=yes \
+            -i ~/.ssh/deploy_key \
             -p "$SSH_PORT" \
             "$SSH_USERNAME@$SSH_HOST" \
-            "echo 'SUCCESS: Bluehost SSH connection established.'"
+            "echo SSH_CONNECTION_SUCCESS"
 
-      - name: Deploy Website using rsync
+      - name: Deploy website with rsync
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
@@ -126,15 +71,10 @@ jobs:
         run: |
           set -eu
 
-          if [ -z "$DEPLOY_PATH" ]; then
-            echo "ERROR: DEPLOY_PATH secret is missing."
-            exit 1
-          fi
+          test -n "$DEPLOY_PATH" || { echo "DEPLOY_PATH is empty"; exit 1; }
 
           rsync -avz \
             --exclude='.git/' \
             --exclude='.github/' \
-            -e "ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -p $SSH_PORT" \
+            -e "ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -i ~/.ssh/deploy_key -p $SSH_PORT" \
             ./ "$SSH_USERNAME@$SSH_HOST:$DEPLOY_PATH"
-
-          echo "SUCCESS: Website deployment completed."
