@@ -1,10 +1,9 @@
 
-name: Deploy Creative Nerds to Bluehost
+name: Deploy Creative Nerds
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -12,11 +11,10 @@ permissions:
 
 jobs:
   deploy:
-    name: Deploy Website
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Install rsync
@@ -26,120 +24,77 @@ jobs:
 
       - name: Configure SSH
         env:
-          SSH_PRIVATE_KEY_B64: ${{ secrets.BLUEHOST_SSH_KEY_B64 }}
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-          SSH_PORT: ${{ secrets.SSH_PORT }}
+          KEY_B64: ${{ secrets.BLUEHOST_SSH_KEY_B64 }}
+          HOST: ${{ secrets.SSH_HOST }}
+          PORT: ${{ secrets.SSH_PORT }}
+          USERNAME: ${{ secrets.SSH_USERNAME }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
         run: |
           set -eu
 
-          test -n "$SSH_PRIVATE_KEY_B64" || {
-            echo "ERROR: BLUEHOST_SSH_KEY_B64 secret is missing"
+          test -n "$KEY_B64" || {
+            echo "Missing repository secret: BLUEHOST_SSH_KEY_B64"
             exit 1
           }
 
-          test -n "$SSH_HOST" || {
-            echo "ERROR: SSH_HOST secret is missing"
-            exit 1
-          }
-
-          test -n "$SSH_PORT" || {
-            echo "ERROR: SSH_PORT secret is missing"
-            exit 1
-          }
+          test -n "$HOST" || { echo "Missing SSH_HOST"; exit 1; }
+          test -n "$PORT" || { echo "Missing SSH_PORT"; exit 1; }
+          test -n "$USERNAME" || { echo "Missing SSH_USERNAME"; exit 1; }
+          test -n "$DEPLOY_PATH" || { echo "Missing DEPLOY_PATH"; exit 1; }
 
           mkdir -p "$HOME/.ssh"
           chmod 700 "$HOME/.ssh"
 
-          printf '%s' "$SSH_PRIVATE_KEY_B64" \
-            | base64 --decode > "$HOME/.ssh/deploy_key"
-
+          printf '%s' "$KEY_B64" | base64 --decode > "$HOME/.ssh/deploy_key"
           chmod 600 "$HOME/.ssh/deploy_key"
 
-          echo "Validating private key format..."
+          ssh-keygen -y -f "$HOME/.ssh/deploy_key" > /dev/null
 
-          ssh-keygen -y -f "$HOME/.ssh/deploy_key" \
-            > /dev/null
-
-          echo "Private key format is valid."
-
-          ssh-keyscan -p "$SSH_PORT" "$SSH_HOST" \
-            >> "$HOME/.ssh/known_hosts" 2>/dev/null
-
-          test -s "$HOME/.ssh/known_hosts"
+          ssh-keyscan -p "$PORT" "$HOST" >> "$HOME/.ssh/known_hosts" 2>/dev/null
           chmod 600 "$HOME/.ssh/known_hosts"
 
-      - name: Test Bluehost SSH Connection
+      - name: Test SSH
         env:
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-          SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
-          SSH_PORT: ${{ secrets.SSH_PORT }}
+          HOST: ${{ secrets.SSH_HOST }}
+          PORT: ${{ secrets.SSH_PORT }}
+          USERNAME: ${{ secrets.SSH_USERNAME }}
         run: |
           set -eu
 
-          test -n "$SSH_USERNAME" || {
-            echo "ERROR: SSH_USERNAME secret is missing"
-            exit 1
-          }
-
-          ssh \
-            -o BatchMode=yes \
+          ssh -o BatchMode=yes \
             -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes \
-            -o ConnectTimeout=20 \
             -i "$HOME/.ssh/deploy_key" \
-            -p "$SSH_PORT" \
-            "$SSH_USERNAME@$SSH_HOST" \
+            -p "$PORT" "$USERNAME@$HOST" \
             "echo SSH_CONNECTION_SUCCESS"
 
-      - name: Validate Deployment Path
+      - name: Deploy
         env:
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-          SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
-          SSH_PORT: ${{ secrets.SSH_PORT }}
+          HOST: ${{ secrets.SSH_HOST }}
+          PORT: ${{ secrets.SSH_PORT }}
+          USERNAME: ${{ secrets.SSH_USERNAME }}
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
         run: |
           set -eu
-
-          test -n "$DEPLOY_PATH" || {
-            echo "ERROR: DEPLOY_PATH secret is missing"
-            exit 1
-          }
 
           case "$DEPLOY_PATH" in
             /*) ;;
-            *)
-              echo "ERROR: DEPLOY_PATH must be an absolute path"
-              exit 1
-              ;;
+            *) echo "DEPLOY_PATH must be an absolute server path"; exit 1 ;;
           esac
 
-          ssh \
-            -o BatchMode=yes \
+          ssh -o BatchMode=yes \
             -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes \
             -i "$HOME/.ssh/deploy_key" \
-            -p "$SSH_PORT" \
-            "$SSH_USERNAME@$SSH_HOST" \
-            "test -d '$DEPLOY_PATH' && echo DEPLOY_PATH_EXISTS"
+            -p "$PORT" "$USERNAME@$HOST" \
+            "test -d '$DEPLOY_PATH'"
 
-      - name: Deploy Website Using rsync
-        env:
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-          SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
-          SSH_PORT: ${{ secrets.SSH_PORT }}
-          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
-        run: |
-          set -eu
-
-          rsync -avz --delete \
+          rsync -avz \
             --exclude='.git/' \
             --exclude='.github/' \
-            -e "ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -i $HOME/.ssh/deploy_key -p $SSH_PORT" \
-            ./ "$SSH_USERNAME@$SSH_HOST:$DEPLOY_PATH"
+            -e "ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -i $HOME/.ssh/deploy_key -p $PORT" \
+            ./ "$USERNAME@$HOST:$DEPLOY_PATH"
 
-          echo "Website deployment completed successfully."
-
-      - name: Cleanup SSH Key
+      - name: Cleanup
         if: always()
-        run: |
-          rm -f "$HOME/.ssh/deploy_key"
+        run: rm -f "$HOME/.ssh/deploy_key"
