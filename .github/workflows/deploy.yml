@@ -1,32 +1,42 @@
+      - name: Prepare SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.BLUEHOST_SSH_KEY }}
+          SSH_PASSPHRASE: ${{ secrets.SSH_PASSPHRASE }}
+        run: |
+          set -eu
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
 
-name: Deploy Website to Bluehost
+          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
 
-on:
-  push:
-    branches:
-      - main
+          cat > ~/.ssh/askpass.sh <<'EOF'
+          #!/bin/sh
+          printf '%s\n' "$SSH_PASSPHRASE"
+          EOF
+          chmod 700 ~/.ssh/askpass.sh
 
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
+          eval "$(ssh-agent -s)"
+          export SSH_AUTH_SOCK SSH_AGENT_PID
+          export DISPLAY=:0
+          export SSH_ASKPASS="$HOME/.ssh/askpass.sh"
+          export SSH_ASKPASS_REQUIRE=force
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+          setsid ssh-add ~/.ssh/deploy_key < /dev/null
+          ssh-add -l
 
-      - name: Deploy website using SSH
+          ssh-keyscan -p "$SSH_PORT" "$SSH_HOST" >> ~/.ssh/known_hosts
+
+      - name: Deploy website using rsync
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
           SSH_PORT: ${{ secrets.SSH_PORT }}
-          SSH_PRIVATE_KEY: ${{ secrets.BLUEHOST_SSH_KEY }}
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
         run: |
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -p "$SSH_PORT" "$SSH_HOST" >> ~/.ssh/known_hosts
-          rsync -avz --exclude='.git/' --exclude='.github/' \
-            -e "ssh -i ~/.ssh/deploy_key -p $SSH_PORT" \
+          set -eu
+          rsync -avz \
+            --exclude='.git/' \
+            --exclude='.github/' \
+            -e "ssh -o IdentitiesOnly=yes -o PreferredAuthentications=publickey -i ~/.ssh/deploy_key -p $SSH_PORT" \
             ./ "$SSH_USERNAME@$SSH_HOST:$DEPLOY_PATH"
