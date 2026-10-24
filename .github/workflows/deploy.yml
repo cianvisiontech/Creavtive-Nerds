@@ -1,7 +1,25 @@
+
+name: Deploy Website to Bluehost
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Prepare SSH
         env:
           SSH_PRIVATE_KEY: ${{ secrets.BLUEHOST_SSH_KEY }}
           SSH_PASSPHRASE: ${{ secrets.SSH_PASSPHRASE }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
         run: |
           set -eu
           mkdir -p ~/.ssh
@@ -17,7 +35,9 @@
           chmod 700 ~/.ssh/askpass.sh
 
           eval "$(ssh-agent -s)"
-          export SSH_AUTH_SOCK SSH_AGENT_PID
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+          echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
+
           export DISPLAY=:0
           export SSH_ASKPASS="$HOME/.ssh/askpass.sh"
           export SSH_ASKPASS_REQUIRE=force
@@ -38,5 +58,5 @@
           rsync -avz \
             --exclude='.git/' \
             --exclude='.github/' \
-            -e "ssh -o IdentitiesOnly=yes -o PreferredAuthentications=publickey -i ~/.ssh/deploy_key -p $SSH_PORT" \
+            -e "ssh -o IdentitiesOnly=yes -o PreferredAuthentications=publickey -p $SSH_PORT" \
             ./ "$SSH_USERNAME@$SSH_HOST:$DEPLOY_PATH"
